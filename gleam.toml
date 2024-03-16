@@ -1,5 +1,5 @@
 name = "nanoworker"
-version = "0.0.0"
+version = "0.0.1"
 
 description = "Lightweight JavaScript Workers for Gleam"
 licences = ["MIT"]
@@ -15,12 +15,8 @@ runtime = "deno"
 typescript_declarations = true
 
 [javascript.deno]
-allow_read = true
-allow_env = true
-allow_net = true
-allow_write = true
-allow_run = true
-# allow_read = ["gleam.toml", "test", "build"]
+allow_read = ["gleam.toml", "test", "build"]
+allow_write = ["build"]
 
 [dependencies]
 gleam_stdlib = "~> 0.34 or ~> 1.0"
