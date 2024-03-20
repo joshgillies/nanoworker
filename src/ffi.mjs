@@ -1,4 +1,12 @@
 /**
+ * Generate a psuedo-random id
+ * @returns {string}
+ */
+function generateRandomId() {
+  return Math.random().toString(36).substring(7);
+}
+
+/**
  * Get the project name, resolveDir and entry point from the projects gleam.toml file
  * @returns {Promise<{projectName: string, resolveDir: string, entry: string}>}
  */
@@ -17,22 +25,30 @@ async function getProjectInfo() {
 
 /**
  * Find the source file that contains the given handler code
- * TODO: this is a naive implementation, it should be improved
  * @param {string} resolveDir
  * @param {string} handlerCode
- * @returns {Promise<string[]>}
+ * @throws {Error}
+ * @returns {String}
  */
 async function findHandlerSourceFile(resolveDir, handlerCode) {
-  const files = [];
   for await (const entry of Deno.readDir(resolveDir)) {
+    if (entry.isDirectory) {
+      const subFile = await findHandlerSourceFile(
+        `${resolveDir}/${entry.name}`,
+        handlerCode
+      );
+      if (subFile) {
+        return subFile;
+      }
+    }
     if (entry.name.endsWith(".mjs")) {
       const file = await Deno.readTextFile(`${resolveDir}/${entry.name}`);
       if (file.includes(handlerCode)) {
-        files.push(entry.name);
+        return entry.name;
       }
     }
   }
-  return files;
+  throw new Error("Handler source file not found");
 }
 
 /**
@@ -43,9 +59,8 @@ async function findHandlerSourceFile(resolveDir, handlerCode) {
 export async function create(handler) {
   const { resolveDir } = await getProjectInfo();
   const handlerCode = handler.toString();
-  const handlerId = `__${Math.random().toString(36).substring(7)}`;
-  // TODO: what if the handler is not found, or there are many files with the same handler?|
-  const [handlerFile] = await findHandlerSourceFile(resolveDir, handlerCode);
+  const handlerId = `__${generateRandomId()}`;
+  const handlerFile = await findHandlerSourceFile(resolveDir, handlerCode);
   const handlerSource = await Deno.readTextFile(`${resolveDir}/${handlerFile}`);
 
   const workerCode = `
@@ -53,8 +68,9 @@ export async function create(handler) {
   ${handlerSource};
   // handler code should be wrapped in a onmessage event listener
   onmessage = (e) => {
-      const result = (${handlerCode})(e.data);
-      postMessage(result);
+      const messageId = e.data[0];
+      const result = (${handlerCode})(e.data[1]);
+      postMessage([messageId, result]);
   };`;
 
   const workerFile = `${handlerFile.replace(
@@ -63,7 +79,6 @@ export async function create(handler) {
   )}`;
   const workerPath = `${resolveDir}/${workerFile}`;
 
-  console.log(workerPath);
   await Deno.writeTextFile(workerPath, workerCode);
 
   globalThis.addEventListener("unload", () => {
@@ -87,13 +102,27 @@ export async function create(handler) {
  */
 export async function send(worker, message) {
   return new Promise((resolve, reject) => {
-    worker.onmessage = (e) => {
-      resolve(e.data);
+    const messageId = generateRandomId();
+
+    const onMessage = (e) => {
+      if (e.data[0] === messageId) {
+        worker.removeEventListener("error", onError);
+        worker.removeEventListener("message", onMessage);
+        resolve(e.data[1]);
+      }
     };
-    worker.onerror = (e) => {
-      reject(e);
+
+    const onError = (e) => {
+      if (e.data[0] === messageId) {
+        worker.removeEventListener("error", onError);
+        worker.removeEventListener("message", onMessage);
+        reject(e);
+      }
     };
-    worker.postMessage(message);
+
+    worker.addEventListener("message", onMessage);
+    worker.addEventListener("error", onError);
+    worker.postMessage([messageId, message]);
   });
 }
 
